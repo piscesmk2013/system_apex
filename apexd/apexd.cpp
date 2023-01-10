@@ -538,8 +538,7 @@ Result<MountedApexData> MountPackageImpl(const ApexFile& apex,
                    << ": " << verity_data.error();
   }
   if (instance.IsBlockApex(apex)) {
-    auto root_digest =
-        instance.GetBlockApexRootDigest(apex.GetManifest().name());
+    auto root_digest = instance.GetBlockApexRootDigest(apex.GetPath());
     if (root_digest.has_value() &&
         root_digest.value() != verity_data->root_digest) {
       return Error() << "Failed to verify Apex Verity data for " << full_path
@@ -1232,6 +1231,15 @@ Result<void> ResumeRevertIfNeeded() {
 }
 
 Result<void> ActivateSharedLibsPackage(const std::string& mount_point) {
+  // Having static mutex here is not great, but since this function is called
+  // only twice during boot we can probably live with that. In U+ we will have
+  // a proper solution implemented.
+  static std::mutex mtx;
+  // ActivateSharedLibsPackage can be called concurrently from multiple threads.
+  // Since this function mutates the shared state in /apex/sharedlibs hold the
+  // mutex to avoid potential race conditions.
+  std::lock_guard guard(mtx);
+
   for (const auto& lib_path : {"lib", "lib64"}) {
     std::string apex_lib_path = mount_point + "/" + lib_path;
     auto lib_dir = PathExists(apex_lib_path);
@@ -3429,7 +3437,7 @@ void CollectApexInfoList(std::ostream& os,
     }
 
     std::optional<int64_t> mtime =
-        instance.GetBlockApexLastUpdateSeconds(apex.GetManifest().name());
+        instance.GetBlockApexLastUpdateSeconds(apex.GetPath());
     if (!mtime.has_value()) {
       struct stat stat_buf;
       if (stat(apex.GetPath().c_str(), &stat_buf) == 0) {
